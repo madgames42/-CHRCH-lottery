@@ -1,7 +1,6 @@
 # $CHRCH-lottery
 
 
-Updated Prompt Specification
 $CHRCH Lottery Contract (Anchor)
 Framework:
 
