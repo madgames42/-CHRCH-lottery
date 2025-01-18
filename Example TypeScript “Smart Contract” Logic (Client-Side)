@@ -1,0 +1,328 @@
+/**************************************************************
+ *  CHRCH Lottery Client-Side Logic (TypeScript Example)
+ *
+ *  DISCLAIMER:
+ *  1) This is NOT an actual on-chain Solana contract. 
+ *  2) Solana on-chain code in Anchor must be Rust -> BPF.
+ *  3) This TypeScript code is a conceptual or test harness
+ *     that mirrors the logic of your Rust program. 
+ **************************************************************/
+
+import * as anchor from "@project-serum/anchor";
+import {
+  Program,
+  Provider,
+  web3,
+  BN,
+  SplToken,
+} from "@project-serum/anchor";
+import { PublicKey, Keypair } from "@solana/web3.js";
+
+// ----------------------------------------
+//  Constants & Error Messages
+// ----------------------------------------
+
+/**
+ * The official $CHRCH token Mint address on Solana.
+ */
+export const CHRCH_MINT_PUBKEY = new PublicKey(
+  "Gk8neJFkvW1Cvm8ZrmpVDhnfBRkFQ5Tny1PRwDcqNz6H"
+);
+
+/**
+ * Tickets must be in multiples of 100 $CHRCH.
+ * If $CHRCH has 6 decimals, 100 $CHRCH = 100_000_000 base units.
+ */
+export const TICKET_COST = new BN(100_000_000);
+
+/**
+ * 1 year in epoch approximation = 100 epochs.
+ */
+export const CLAIM_EXPIRY_EPOCHS = new BN(100);
+
+/**
+ * Address to which "burned" tokens are transferred.
+ */
+export const CHRCH_BURN_ADDRESS = new PublicKey(
+  "SomeBurnAddress11111111111111111111111111"
+);
+
+/** Example error messages to mirror Rust side. */
+export enum LotteryError {
+  InvalidTokenError = "Invalid token account provided (must be $CHRCH).",
+  WrongMultipleError = "Amount must be a multiple of 100 $CHRCH.",
+  InsufficientTickets = "No tickets to draw from or fewer than 3 tickets sold.",
+  NoPrizeAvailable = "Prize already claimed or no prize for this user.",
+  PrizeExpired = "Claim deadline exceeded; prize is burned.",
+  RngFailure = "Chainlink VRF unavailable or RNG request failed.",
+}
+
+// ----------------------------------------
+//  Data Structures
+// ----------------------------------------
+
+export interface PlayerInfo {
+  player: PublicKey;
+  tickets: BN; // how many tickets they bought
+}
+
+export interface WinnerInfo {
+  player: PublicKey;
+  rank: number; // 1, 2, or 3
+  claimed: boolean;
+  claimDeadlineEpoch: BN;
+  prizeAmount: BN;
+}
+
+export interface LotteryState {
+  bump: number;
+  owner: PublicKey;
+  chrchMint: PublicKey;
+
+  currentEpoch: BN;
+  totalTickets: BN;
+  totalChrchInPot: BN;
+
+  // 2% waiting for owner
+  ownerEscrow: BN;
+
+  // participants & winners
+  players: PlayerInfo[];
+  winners: WinnerInfo[];
+
+  // VRF
+  vrfInProgress: boolean;
+  drawExecuted: boolean;
+}
+
+// ----------------------------------------
+//  Example Anchor Program Class (TS)
+// ----------------------------------------
+
+/**
+ * Example class to represent calls you'd typically make 
+ * to your on-chain Rust program from TypeScript.
+ */
+export class CHRCHLotteryClient {
+  private program: Program; // The Anchor Program from your IDL
+  private provider: Provider;
+
+  constructor(program: Program) {
+    this.program = program;
+    this.provider = program.provider as Provider;
+  }
+
+  /**
+   * Example: buy tickets by sending user $CHRCH to the vault.
+   */
+  public async buyTicket(
+    user: Keypair,
+    depositTokenAccount: PublicKey,
+    vault: PublicKey,
+    lotteryStatePda: PublicKey,
+    amount: BN
+  ): Promise<void> {
+    // 1) Validate that 'amount' is multiple of 100 $CHRCH.
+    if (!amount.mod(TICKET_COST).eq(new BN(0))) {
+      throw new Error(LotteryError.WrongMultipleError);
+    }
+
+    // 2) Build transaction calling the on-chain "buy_ticket" instruction.
+    //    In real usage, you'd do something like:
+    //
+    // await this.program.methods
+    //   .buyTicket(amount)
+    //   .accounts({
+    //     user: user.publicKey,
+    //     chrchMint: CHRCH_MINT_PUBKEY,
+    //     depositTokenAccount,
+    //     vault,
+    //     lotteryState: lotteryStatePda,
+    //     tokenProgram: TOKEN_PROGRAM_ID,
+    //   })
+    //   .signers([user])
+    //   .rpc();
+    //
+    // For demonstration, we'll just log it:
+    console.log("Calling buyTicket instruction with", {
+      user: user.publicKey.toBase58(),
+      depositTokenAccount: depositTokenAccount.toBase58(),
+      vault: vault.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+      amount: amount.toString(),
+    });
+  }
+
+  /**
+   * Request draw. If <3 tickets, burn entire pot; otherwise, request VRF.
+   */
+  public async requestDraw(
+    user: Keypair,
+    vault: PublicKey,
+    lotteryStatePda: PublicKey
+  ): Promise<void> {
+    console.log("Calling requestDraw instruction with", {
+      user: user.publicKey.toBase58(),
+      vault: vault.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+    });
+    // In real usage, you'd do:
+    // await this.program.methods
+    //   .requestDraw()
+    //   .accounts({ /* ... */ })
+    //   .signers([user])
+    //   .rpc();
+  }
+
+  /**
+   * VRF callback (fulfillRandomness). In real usage, 
+   * this would be called automatically by Chainlink’s VRF program.
+   */
+  public async fulfillRandomness(
+    vrfProvider: Keypair,
+    vault: PublicKey,
+    lotteryStatePda: PublicKey,
+    randomness: BN
+  ): Promise<void> {
+    console.log("Calling fulfillRandomness instruction with", {
+      vrfProvider: vrfProvider.publicKey.toBase58(),
+      vault: vault.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+      randomness: randomness.toString(),
+    });
+    // Real usage:
+    // await this.program.methods
+    //   .fulfillRandomness(randomness)
+    //   .accounts({ /* ... */ })
+    //   .signers([vrfProvider])
+    //   .rpc();
+  }
+
+  /**
+   * A user claims their prize if they are a winner and within claim deadline.
+   */
+  public async claimPrize(
+    user: Keypair,
+    userTokenAccount: PublicKey,
+    vault: PublicKey,
+    lotteryStatePda: PublicKey
+  ): Promise<void> {
+    console.log("Calling claimPrize instruction with", {
+      user: user.publicKey.toBase58(),
+      userTokenAccount: userTokenAccount.toBase58(),
+      vault: vault.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+    });
+    // Real usage:
+    // await this.program.methods
+    //   .claimPrize()
+    //   .accounts({ /* ... */ })
+    //   .signers([user])
+    //   .rpc();
+  }
+
+  /**
+   * Anyone can withdraw the owner's 2%. Tokens go to the owner’s token account.
+   */
+  public async withdrawOwnerFunds(
+    caller: Keypair,
+    owner: PublicKey,
+    ownerTokenAccount: PublicKey,
+    vault: PublicKey,
+    lotteryStatePda: PublicKey
+  ): Promise<void> {
+    console.log("Calling withdrawOwnerFunds instruction with", {
+      caller: caller.publicKey.toBase58(),
+      owner: owner.toBase58(),
+      ownerTokenAccount: ownerTokenAccount.toBase58(),
+      vault: vault.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+    });
+    // Real usage:
+    // await this.program.methods
+    //   .withdrawOwnerFunds()
+    //   .accounts({ /* ... */ })
+    //   .signers([caller])
+    //   .rpc();
+  }
+
+  /**
+   * Off-chain keeper or admin sets the new epoch.
+   */
+  public async advanceEpoch(
+    user: Keypair,
+    lotteryStatePda: PublicKey,
+    newEpoch: BN
+  ): Promise<void> {
+    console.log("Calling advanceEpoch instruction with", {
+      user: user.publicKey.toBase58(),
+      lotteryState: lotteryStatePda.toBase58(),
+      newEpoch: newEpoch.toString(),
+    });
+    // Real usage:
+    // await this.program.methods
+    //   .advanceEpoch(newEpoch)
+    //   .accounts({ /* ... */ })
+    //   .signers([user])
+    //   .rpc();
+  }
+}
+
+// ----------------------------------------
+//  Usage Example (Pseudo-Code)
+// ----------------------------------------
+
+async function demoUsage() {
+  // 1. Set up Anchor provider (normally uses your local wallet or a keypair).
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  // 2. Suppose we've already loaded the IDL & Program ID for the Rust contract.
+  //    e.g. const idl = await anchor.Program.fetchIdl(PROGRAM_ID, provider);
+  //    Then:
+  const PROGRAM_ID = new PublicKey("YourRustProgramPublicKey1111111");
+  const program = new anchor.Program(
+    /* idl */ {} as any, 
+    PROGRAM_ID,
+    provider
+  );
+
+  // 3. Create instance of our TypeScript "client"
+  const lotteryClient = new CHRCHLotteryClient(program);
+
+  // Example Keypairs
+  const user = Keypair.generate();
+  const vault = Keypair.generate().publicKey;
+  const lotteryStatePda = Keypair.generate().publicKey;
+
+  // 4. Buying tickets
+  await lotteryClient.buyTicket(
+    user,
+    Keypair.generate().publicKey /* depositTokenAccount */,
+    vault,
+    lotteryStatePda,
+    new BN(300_000_000) // i.e., 300 $CHRCH if TICKET_COST=100_000_000
+  );
+
+  // 5. Request draw
+  await lotteryClient.requestDraw(user, vault, lotteryStatePda);
+
+  // 6. Fulfill randomness (pseudo-random BN)
+  const randomVal = new BN("1234567890123456789");
+  const vrfProvider = Keypair.generate();
+  await lotteryClient.fulfillRandomness(vrfProvider, vault, lotteryStatePda, randomVal);
+
+  // 7. Claim prize
+  const userTokenAccount = Keypair.generate().publicKey;
+  await lotteryClient.claimPrize(user, userTokenAccount, vault, lotteryStatePda);
+
+  // 8. Withdraw owner funds
+  const owner = Keypair.generate();
+  const ownerTokenAccount = Keypair.generate().publicKey;
+  await lotteryClient.withdrawOwnerFunds(user, owner.publicKey, ownerTokenAccount, vault, lotteryStatePda);
+
+  // 9. Advance epoch
+  await lotteryClient.advanceEpoch(user, lotteryStatePda, new BN(10));
+}
+
+// (You would actually call demoUsage() in a script or test file.)
